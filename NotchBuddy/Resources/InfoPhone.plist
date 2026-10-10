@@ -14,6 +14,11 @@
 	<string>fr.louisraille.Coucou</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>tr</string>
+	</array>
 	<key>CFBundleName</key>
 	<string>Coucou</string>
 	<key>CFBundlePackageType</key>
@@ -35,6 +40,21 @@
 	<string>3</string>
 	<key>CoucouAPNsEnvironment</key>
 	<string>$(COUCOU_APNS_ENV)</string>
+	<key>INAlternativeAppNames</key>
+	<array>
+		<dict>
+			<key>INAlternativeAppName</key>
+			<string>Kuku</string>
+			<key>INAlternativeAppNamePronunciationHint</key>
+			<string>kuku</string>
+		</dict>
+		<dict>
+			<key>INAlternativeAppName</key>
+			<string>Mochi</string>
+			<key>INAlternativeAppNamePronunciationHint</key>
+			<string>moçi</string>
+		</dict>
+	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSRequiresIPhoneOS</key>

@@ -100,6 +100,14 @@ final class PhoneLink {
     var notificationsAllowed: Bool?
     /// A session to open, from a notification, a shortcut or the Control Center.
     var openPillId: String?
+    /// Where the runs sent from here stand, by pill ID (InstructionRunner on the Mac).
+    var runStatus: [String: RunStatus] = [:]
+    /// Folders the Mac can start a new session in, newest first.
+    var projects: [RunProject] = []
+    /// This Mac and the SSH hosts connected now, for the folder browser.
+    var hosts: [RunHost] = []
+    /// The last folder list the Mac sent (folder browser).
+    var folderListing: FolderListing?
 
     @ObservationIgnored private let container = CKContainer(identifier: PhoneLink.containerID)
     @ObservationIgnored private var database: CKDatabase { container.privateCloudDatabase }
@@ -227,6 +235,10 @@ final class PhoneLink {
                     sessions.removeAll { "session-\($0.id)" == deletion.recordID.recordName }
                     gotNew = true
                 }
+                for deletion in changes.deletions where deletion.recordType == RunProjectList.recordType {
+                    projects = []
+                    hosts = []
+                }
                 for deletion in changes.deletions where deletion.recordType == TurnSnapshot.recordType {
                     if let id = TurnSnapshot.pillId(fromRecordName: deletion.recordID.recordName) { turns[id] = nil }
                 }
@@ -260,6 +272,25 @@ final class PhoneLink {
     }
 
     private func add(_ record: CKRecord) -> Bool {
+        if record.recordType == RunStatus.recordType {
+            guard let payload = record.encryptedValues["payload"] as? String,
+                  let status = try? JSONDecoder().decode(RunStatus.self, from: Data(payload.utf8)) else { return false }
+            if (runStatus[status.pillId]?.updatedAt ?? .distantPast) <= status.updatedAt { runStatus[status.pillId] = status }
+            return false
+        }
+        if record.recordType == RunProjectList.recordType {
+            guard let payload = record.encryptedValues["payload"] as? String,
+                  let list = try? JSONDecoder().decode(RunProjectList.self, from: Data(payload.utf8)) else { return false }
+            projects = list.projects
+            hosts = list.hosts ?? []
+            return false
+        }
+        if record.recordType == FolderListing.recordType {
+            guard let payload = record.encryptedValues["payload"] as? String,
+                  let listing = try? JSONDecoder().decode(FolderListing.self, from: Data(payload.utf8)) else { return false }
+            folderListing = listing
+            return false
+        }
         if record.recordType == TurnSnapshot.recordType {
             guard let payload = record.encryptedValues["payload"] as? String,
                   let turn = try? JSONDecoder().decode(TurnSnapshot.self, from: Data(payload.utf8)) else { return false }
@@ -480,20 +511,68 @@ final class PhoneLink {
     // MARK: Instructions (step B)
 
     /// Sends an instruction to continue a session on the Mac. The Mac takes it
-    /// within ~15 s and deletes it; it never runs twice.
-    func sendInstruction(_ text: String, pillId: String) async -> Bool {
-        let record = CKRecord(recordType: "Instruction",
-                              recordID: CKRecord.ID(recordName: "instruction-\(UUID().uuidString)", zoneID: Self.zoneID))
+    /// at once (or within 15 s) and deletes it; it never runs twice. Returns
+    /// the record name, which the Mac's RunStatus answers with.
+    @discardableResult
+    func sendInstruction(_ text: String, pillId: String, options: RunOptions = RunOptions()) async -> String? {
+        await saveInstruction(kind: "run", pillId: pillId, text: text, options: options)
+    }
+
+    /// Starts a new session in a project the Mac listed. Returns its pill ID.
+    func startSession(_ text: String, in project: RunProject, options: RunOptions) async -> String? {
+        let sessionId = UUID().uuidString.lowercased()
+        let pillId = project.pillId(sessionId: sessionId)
+        let sent = await saveInstruction(kind: "new", pillId: pillId, text: text, options: options) { record in
+            record["projectId"] = project.id
+            record["sessionId"] = sessionId
+        }
+        return sent == nil ? nil : pillId
+    }
+
+    /// Starts a new session in a folder picked in the folder browser. Returns its pill ID.
+    func startSession(_ text: String, on host: RunHost, in folder: String, options: RunOptions) async -> String? {
+        let sessionId = UUID().uuidString.lowercased()
+        let pillId = host.pillId(sessionId: sessionId)
+        let sent = await saveInstruction(kind: "new", pillId: pillId, text: text, options: options) { record in
+            record["place"] = host.place
+            record["sessionId"] = sessionId
+            record.encryptedValues["cwd"] = folder
+        }
+        return sent == nil ? nil : pillId
+    }
+
+    /// Asks the Mac for the folders in one folder of a place ("~" for home).
+    /// The answer comes as `folderListing`, with this request's id.
+    func listFolders(place: String, path: String) async -> String? {
+        await saveInstruction(kind: "list", pillId: "", text: "", options: RunOptions()) { record in
+            record["place"] = place
+            record.encryptedValues["path"] = path
+        }
+    }
+
+    /// Stops the run sent from here for this session (and what waits behind it).
+    func stopRun(pillId: String) async -> Bool {
+        await saveInstruction(kind: "stop", pillId: pillId, text: "", options: RunOptions()) != nil
+    }
+
+    private func saveInstruction(kind: String, pillId: String, text: String, options: RunOptions,
+                                 extra: (CKRecord) -> Void = { _ in }) async -> String? {
+        let name = "instruction-\(UUID().uuidString)"
+        let record = CKRecord(recordType: "Instruction", recordID: CKRecord.ID(recordName: name, zoneID: Self.zoneID))
+        record["kind"] = kind
         record["pillId"] = pillId
         record["createdAt"] = Date()
         record["deviceName"] = UIDevice.current.name
+        if !options.model.isEmpty { record["model"] = options.model }
+        if options.planFirst { record["planFirst"] = true }
         record.encryptedValues["text"] = text
+        extra(record)
         do {
             _ = try await database.save(record)
-            return true
+            return name
         } catch {
             lastPong = "Instruction failed: \(error.localizedDescription)"
-            return false
+            return nil
         }
     }
 

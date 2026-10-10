@@ -569,6 +569,7 @@ final class AppState: ObservableObject {
     func updateTask(id: String, state: BotState) {
         guard let idx = tasks.firstIndex(where: { $0.id == id }) else { return }
         tasks[idx].state = state
+        if state != .idle { tasks[idx].lastActiveAt = Date() }
     }
 
     func setFocus(_ id: String) {

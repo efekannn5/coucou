@@ -346,7 +346,7 @@ final class HookServer: @unchecked Sendable {
                      ?? "unknown"
         let cwd = payload["cwd"] as? String ?? ""
         let rawName = URL(fileURLWithPath: cwd).lastPathComponent
-        let projectName = aliasProjectName(rawName.isEmpty ? "Session" : rawName)
+        let baseName = aliasProjectName(rawName.isEmpty ? "Session" : rawName)
 
         // Determine which pill this event belongs to.
         // coucou_agent must be lowercase, digits and hyphens, ≤ 24 chars.
@@ -359,16 +359,21 @@ final class HookServer: @unchecked Sendable {
         // Cursor identified solely by its stable Electron bundle ID.
         // ToDesktop builds other apps too — do not match on "todesktop" alone.
         let isCursorEditor = bundleId.lowercased() == "com.todesktop.230313mzl4w4u92"
+        // Claude Code on a remote machine over SSH (SSHTunnels): its terminal
+        // env doesn't cross SSH, so the hook tags the host and it gets the SSH pill.
+        let remoteHost = Self.validateRemoteHost(payload["coucou_remote_host"] as? String ?? "")
         let isVSCodeEditor = !isCursorEditor && (
             termProgram.lowercased().contains("vscode") ||
             bundleId.lowercased().contains("vscode"))
+        let projectName = remoteHost.map { "\(baseName) @ \($0) · \(sessionId.prefix(4))" } ?? baseName
 
         // Routing:
         // • "codex" → agent_codex (GitHub build only: workspace pill, approvals in the notch)
         // • other valid coucou_agent → external pill (fire-and-forget, no approval card)
+        // • coucou_remote_host (Claude Code over SSH) → agent_ssh-<session>
         // • Cursor bundle ID → agent_cursor
         // • VS Code → integration_claude
-        // • a known terminal (Warp, Terminal, iTerm…) → integration_claude, host recorded on the task
+        // • a known terminal (Warp, Terminal, iTerm…) → agent_term-<session>, host recorded on the task
         #if !APPSTORE
         let isCodexEvent = rawAgent == "codex"
         #else
@@ -383,6 +388,9 @@ final class HookServer: @unchecked Sendable {
         } else if let agent = validAgent {
             agentId = "agent_\(agent)"
             isExternalAgent = true
+        } else if let remoteHost {
+            agentId = PillCatalog.sshPillId(host: remoteHost, sessionId: sessionId)
+            isExternalAgent = false
         } else if isCursorEditor {
             agentId = "agent_cursor"
             isExternalAgent = false
@@ -390,7 +398,8 @@ final class HookServer: @unchecked Sendable {
             agentId = "integration_claude"
             isExternalAgent = false
         } else if let host = ClaudeHost.terminal(termProgram: termProgram, bundleId: bundleId) {
-            agentId = "integration_claude"
+            // Each terminal session its own pill, like SSH: two terminals stay apart.
+            agentId = PillCatalog.terminalPillId(sessionId: sessionId)
             isExternalAgent = false
             hostApp = host.bundleId
         } else {
@@ -421,6 +430,8 @@ final class HookServer: @unchecked Sendable {
             case "agent_copilot": handledNote = "Handled in Copilot CLI."
             case "agent_muse":    handledNote = "Handled in Muse Code."
             case "agent_hermes":  handledNote = "Handled in Hermes."
+            case let id where PillCatalog.isSSH(id): handledNote = "Handled in the SSH terminal."
+            case let id where PillCatalog.isTerminal(id): handledNote = "Handled in \(terminalHostName(id))."
             default:              handledNote = "Handled in \(claudeHostName)."
             }
             var resolved = false
@@ -561,6 +572,14 @@ final class HookServer: @unchecked Sendable {
             clearPillBadge(id: agentId)
 
         case "SessionEnd":
+            #if PHONE_LINK && !APPSTORE
+            // An instruction from the iPhone ran `claude -p --resume`: its end
+            // is not the session's, which goes on in the terminal or editor.
+            if InstructionRunner.shared.isOwnRun(sessionId: sessionId) {
+                nbLog("SessionEnd of an iPhone instruction run kept \(agentId) (\(sessionId.prefix(8)))")
+                break
+            }
+            #endif
             activeSessionId = nil
             if let idx = state.tasks.firstIndex(where: { $0.id == agentId }) { state.tasks[idx].finalLine = nil }
             state.clearSessionDiffs(for: agentId)
@@ -579,6 +598,13 @@ final class HookServer: @unchecked Sendable {
     }
 
     // MARK: - Agent validation + dynamic pill
+
+    /// A remote host name from the hook: letters, digits, dots and hyphens, ≤ 64 chars.
+    static func validateRemoteHost(_ raw: String) -> String? {
+        guard !raw.isEmpty, raw.count <= 64,
+              raw.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "-") }) else { return nil }
+        return raw
+    }
 
     /// Validates a coucou_agent name: lowercase, digits and hyphens, 1–24 chars.
     /// "claude" is reserved and rejected so it cannot impersonate the Claude Code pill.
@@ -664,15 +690,20 @@ final class HookServer: @unchecked Sendable {
                      ?? "unknown"
         let cwd       = payload["cwd"]        as? String ?? ""
         let rawName   = URL(fileURLWithPath: cwd).lastPathComponent
-        let projectName = aliasProjectName(rawName.isEmpty ? "Session" : rawName)
+        let baseName  = aliasProjectName(rawName.isEmpty ? "Session" : rawName)
 
         let rawAgent = payload["coucou_agent"] as? String ?? ""
         let termProgram = payload["term_program"] as? String ?? ""
         let bundleId    = payload["bundle_id"]    as? String ?? ""
         let isCursorEditor = bundleId.lowercased() == "com.todesktop.230313mzl4w4u92"
+        // Claude Code on a remote machine over SSH (SSHTunnels): its terminal
+        // env doesn't cross SSH, so the hook tags the host and it gets the SSH pill.
+        let remoteHost = Self.validateRemoteHost(payload["coucou_remote_host"] as? String ?? "")
+        let isRemote = remoteHost != nil
         let isVSCodeEditor = !isCursorEditor && (
             termProgram.lowercased().contains("vscode") ||
             bundleId.lowercased().contains("vscode"))
+        let projectName = remoteHost.map { "\(baseName) @ \($0) · \(sessionId.prefix(4))" } ?? baseName
 
         // Codex, Copilot CLI and Muse Code get the same approval card as Claude Code / Cursor.
         // Other external agents (any other coucou_agent) answer immediately with "ask"
@@ -702,6 +733,8 @@ final class HookServer: @unchecked Sendable {
         }
 
         // Determine which workspace pill owns the request.
+        let terminalHost = isCursorEditor || isVSCodeEditor || isRemote ? nil
+            : ClaudeHost.terminal(termProgram: termProgram, bundleId: bundleId)
         let pillId: String
         if isCodexRequest {
             pillId = "agent_codex"
@@ -711,16 +744,18 @@ final class HookServer: @unchecked Sendable {
             pillId = "agent_muse"
         } else if isHermesRequest {
             pillId = "agent_hermes"
+        } else if let remoteHost {
+            pillId = PillCatalog.sshPillId(host: remoteHost, sessionId: sessionId)
         } else if isCursorEditor {
             pillId = "agent_cursor"
+        } else if terminalHost != nil {
+            pillId = PillCatalog.terminalPillId(sessionId: sessionId)
         } else {
             pillId = "integration_claude"
         }
         // Terminal sessions: only when turned on in Settings, else the terminal asks itself.
-        let terminalHost = isCursorEditor || isVSCodeEditor ? nil
-            : ClaudeHost.terminal(termProgram: termProgram, bundleId: bundleId)
         let isTerminal = terminalHost != nil && ClaudeHost.terminalCardsEnabled
-        guard isCodexRequest || isCopilotRequest || isMuseRequest || isHermesRequest || isCursorEditor || isVSCodeEditor || isTerminal else {
+        guard isCodexRequest || isCopilotRequest || isMuseRequest || isHermesRequest || isRemote || isCursorEditor || isVSCodeEditor || isTerminal else {
             Task.detached { [weak self] in
                 self?.sendLine(fd: fd, text: #"{"permissionDecision":"ask"}"#)
                 close(fd)
@@ -787,6 +822,8 @@ final class HookServer: @unchecked Sendable {
             case "agent_copilot": note = "Handled in Copilot CLI."
             case "agent_muse":    note = "Handled in Muse Code."
             case "agent_hermes":  note = "Handled in Hermes."
+            case let id where PillCatalog.isSSH(id): note = "Handled in the SSH terminal."
+            case let id where PillCatalog.isTerminal(id): note = "Handled in \(self.terminalHostName(id))."
             default:              note = "Handled in \(self.claudeHostName)."
             }
             self.dismissApprovalCard(note: note)
@@ -881,33 +918,42 @@ final class HookServer: @unchecked Sendable {
                      ?? "unknown"
         let cwd       = payload["cwd"]        as? String ?? ""
         let rawName   = URL(fileURLWithPath: cwd).lastPathComponent
-        let projectName = aliasProjectName(rawName.isEmpty ? "Session" : rawName)
+        let baseName  = aliasProjectName(rawName.isEmpty ? "Session" : rawName)
 
         let rawAgent    = payload["coucou_agent"] as? String ?? ""
         let termProgram = payload["term_program"]  as? String ?? ""
         let bundleId    = payload["bundle_id"]     as? String ?? ""
         let isCursorEditor = bundleId.lowercased() == "com.todesktop.230313mzl4w4u92"
+        // Claude Code on a remote machine over SSH (SSHTunnels): its terminal
+        // env doesn't cross SSH, so the hook tags the host and it gets the SSH pill.
+        let remoteHost = Self.validateRemoteHost(payload["coucou_remote_host"] as? String ?? "")
+        let isRemote = remoteHost != nil
         let isVSCodeEditor = !isCursorEditor && (
             termProgram.lowercased().contains("vscode") ||
             bundleId.lowercased().contains("vscode"))
+        let projectName = remoteHost.map { "\(baseName) @ \($0) · \(sessionId.prefix(4))" } ?? baseName
         #if !APPSTORE
         let isCodexRequest = rawAgent == "codex"
         #else
         let isCodexRequest = false
         #endif
+        let terminalHost = isCursorEditor || isVSCodeEditor || isRemote ? nil
+            : ClaudeHost.terminal(termProgram: termProgram, bundleId: bundleId)
         let pillId: String
         if isCodexRequest {
             pillId = "agent_codex"
+        } else if let remoteHost {
+            pillId = PillCatalog.sshPillId(host: remoteHost, sessionId: sessionId)
         } else if isCursorEditor {
             pillId = "agent_cursor"
+        } else if terminalHost != nil {
+            pillId = PillCatalog.terminalPillId(sessionId: sessionId)
         } else {
             pillId = "integration_claude"
         }
         // Terminal sessions: only when turned on in Settings, else the terminal asks itself.
-        let terminalHost = isCursorEditor || isVSCodeEditor ? nil
-            : ClaudeHost.terminal(termProgram: termProgram, bundleId: bundleId)
         let isTerminal = terminalHost != nil && ClaudeHost.terminalCardsEnabled
-        guard isCodexRequest || isCursorEditor || isVSCodeEditor || isTerminal else {
+        guard isCodexRequest || isRemote || isCursorEditor || isVSCodeEditor || isTerminal else {
             Task.detached { [weak self] in
                 self?.sendLine(fd: fd, text: #"{"permissionDecision":"ask"}"#)
                 close(fd)
@@ -973,6 +1019,12 @@ final class HookServer: @unchecked Sendable {
         ClaudeHost.name(for: AppState.shared.tasks.first { $0.id == "integration_claude" }?.hostApp)
     }
 
+    /// "Terminal", "iTerm"… — where a terminal session's pill runs.
+    @MainActor
+    private func terminalHostName(_ pillId: String) -> String {
+        ClaudeHost.name(for: AppState.shared.tasks.first { $0.id == pillId }?.hostApp ?? "com.apple.Terminal")
+    }
+
     /// Updates or transiently creates a workspace pill (VS Code or Cursor) task.
     /// If the task already exists (persistent), just updates name/cwd.
     /// If missing (transient), creates it and inserts after the main pill.
@@ -982,7 +1034,7 @@ final class HookServer: @unchecked Sendable {
         if let idx = state.tasks.firstIndex(where: { $0.id == id }) {
             state.tasks[idx].name = projectName
             if !cwd.isEmpty { state.tasks[idx].sessionCwd = cwd }
-            if id == "integration_claude" { state.tasks[idx].hostApp = hostApp }
+            if id == "integration_claude" || PillCatalog.isTerminal(id) { state.tasks[idx].hostApp = hostApp }
             if !bundleId.isEmpty { state.tasks[idx].sessionBundleId = bundleId }
             return
         }
@@ -992,7 +1044,7 @@ final class HookServer: @unchecked Sendable {
         let source = def?.source ?? .agent
         var task = AgentTask(id: id, name: projectName, color: color,
                              state: .idle, steps: [], source: source, isIntegration: true)
-        if id == "integration_claude" { task.hostApp = hostApp }
+        if id == "integration_claude" || PillCatalog.isTerminal(id) { task.hostApp = hostApp }
         if !bundleId.isEmpty { task.sessionBundleId = bundleId }
         if let mainIdx = state.tasks.firstIndex(where: { $0.id == state.mainPillId }) {
             state.tasks.insert(task, at: mainIdx + 1)
@@ -3057,8 +3109,15 @@ private let nbHookShellWrapper = """
 # Coucou hook relay — always exits 0, never blocks Claude Code
 HOOK_DIR="$(dirname "$0")"
 out=""
-if xcode-select -p >/dev/null 2>&1; then
-    out=$(/usr/bin/python3 "$HOOK_DIR/nb-hook.py" "$@" 2>/dev/null)
+if [ "$(uname)" = "Darwin" ]; then
+    # Only with the CLI tools: /usr/bin/python3 alone opens the install dialog
+    xcode-select -p >/dev/null 2>&1 && PY=/usr/bin/python3 || PY=""
+else
+    # Remote machine over SSH (Linux): python3 from PATH
+    PY=$(command -v python3 2>/dev/null || true)
+fi
+if [ -n "$PY" ]; then
+    out=$("$PY" "$HOOK_DIR/nb-hook.py" "$@" 2>/dev/null)
     rc=$?
     if [ "$rc" -ne 0 ] || [ -z "$out" ]; then
         out=""
@@ -3164,9 +3223,14 @@ def main():
         if '--statusline' not in sys.argv[1:]:
             return
 
-    socket_path = os.path.expanduser(
-        '~/Library/Application Support/NotchBuddy/nb.sock'
+    # Over SSH (scripts/coucou-ssh), the Mac's socket is forwarded to
+    # ~/.coucou/nb.sock on the remote machine; COUCOU_SOCKET overrides both.
+    remote = sys.platform != 'darwin'
+    socket_path = os.environ.get('COUCOU_SOCKET') or os.path.expanduser(
+        '~/.coucou/nb.sock' if remote else '~/Library/Application Support/NotchBuddy/nb.sock'
     )
+    if remote and isinstance(payload, dict):
+        payload.setdefault('coucou_remote_host', socket.gethostname()[:64])
 
     # --statusline mode: relay rate_limits to Coucou, then delegate to saved previous
     if '--statusline' in sys.argv[1:]:

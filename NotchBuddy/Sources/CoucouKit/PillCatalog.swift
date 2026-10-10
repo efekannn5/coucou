@@ -58,6 +58,8 @@ struct PillDefinition {
         case "agent_codex":        return "Codex"
         case "agent_hermes":       return "Hermes"
         case "agent_claude-desktop": return "Claude Desktop"
+        case "agent_ssh":          return "Claude Code"
+        case "agent_term":         return "Claude Code"
         default:                   return "Agent"
         }
     }
@@ -94,6 +96,12 @@ enum PillCatalog {
         // `coucou_agent: claude-desktop` from CLAUDE_CODE_ENTRYPOINT, so nothing to install.
         .init(id: "agent_claude-desktop", name: "Claude Desktop", color: "#D97757",
               category: .agent,     subtitle: "Agent",        source: .agent),
+        // Claude Code on remote machines, through Coucou's SSH tunnels (SSHTunnels.swift).
+        .init(id: "agent_ssh",           name: "SSH",         color: "#A3E635",
+              category: .agent,     subtitle: "Remote",       source: .agent,  githubOnly: true),
+        // Claude Code in a terminal on this Mac (Terminal, iTerm, Warp…), one pill per session.
+        .init(id: "agent_term",          name: "Terminal",    color: "#F59E0B",
+              category: .agent,     subtitle: "Terminal",     source: .agent,  githubOnly: true),
         // ── AI for the chat ──────────────────────────────────────────────────
         .init(id: "ai_anthropic",        name: "Anthropic",   color: ChatProvider.anthropic.accentHex,
               category: .ai,        subtitle: "Chat",         source: .n8n),
@@ -138,8 +146,50 @@ enum PillCatalog {
     /// Default ID for the always-on main workspace pill.
     static let defaultMainPillId = "integration_claude"
 
-    /// Looks up a definition by task ID (nil if not in catalog).
+    /// Looks up a definition by task ID (nil if not in catalog). Each SSH
+    /// session's pill ("agent_ssh-…") uses the SSH pill's definition, each
+    /// terminal session's ("agent_term-…") the Terminal pill's.
     static func definition(for id: String) -> PillDefinition? {
-        all.first { $0.id == id }
+        if let found = all.first(where: { $0.id == id }) { return found }
+        if isSSH(id) { return all.first { $0.id == "agent_ssh" } }
+        if isTerminal(id) { return all.first { $0.id == "agent_term" } }
+        return nil
+    }
+
+    /// The Terminal pill, or one local terminal session's own pill.
+    static func isTerminal(_ id: String) -> Bool {
+        id == "agent_term" || id.hasPrefix("agent_term-")
+    }
+
+    /// One pill per Claude Code session in a terminal on this Mac, so two
+    /// terminals stay apart: "agent_term-" + 12 hex of a hash of the session.
+    static func terminalPillId(sessionId: String) -> String {
+        "agent_term-" + fnv12("local\u{1F}\(sessionId)")
+    }
+
+    /// A session pill that takes instructions from the iPhone (Claude Code).
+    static func takesInstructions(_ id: String) -> Bool {
+        id == "integration_claude" || id == "agent_cursor" || isSSH(id) || isTerminal(id)
+    }
+
+    /// The SSH pill, or one SSH session's own pill.
+    static func isSSH(_ id: String) -> Bool {
+        id == "agent_ssh" || id.hasPrefix("agent_ssh-")
+    }
+
+    /// One pill per remote Claude Code session, so two sessions on the same
+    /// host stay apart: "agent_ssh-" + 12 hex of a hash of host and session.
+    static func sshPillId(host: String, sessionId: String) -> String {
+        "agent_ssh-" + fnv12("\(host)\u{1F}\(sessionId)")
+    }
+
+    /// FNV-1a 64, last 12 hex: stable across launches (Swift's Hasher is seeded per run).
+    private static func fnv12(_ text: String) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in text.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x100000001b3
+        }
+        return String(String(hash, radix: 16).suffix(12))
     }
 }

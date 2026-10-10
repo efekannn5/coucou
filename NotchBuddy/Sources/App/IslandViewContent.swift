@@ -244,6 +244,21 @@ struct OverviewView: View {
             #if !APPSTORE
             TerminalTarget.activate(sessionBundleId: nil)
             #endif
+        case let id where PillCatalog.isTerminal(id):
+            #if !APPSTORE
+            ClaudeHost.activate(task.hostApp ?? "com.apple.Terminal")
+            #endif
+        case let id where PillCatalog.isSSH(id):
+            #if !APPSTORE
+            // The SSH session runs in the user's SSH client: Termius first.
+            let sshClientIds = ["com.termius.mac", "com.apple.Terminal", "com.googlecode.iterm2",
+                                "net.kovidgoyal.kitty", "com.mitchellh.ghostty"]
+            if let hit = sshClientIds.compactMap({ id in
+                NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == id }
+            }).first {
+                hit.activate()
+            }
+            #endif
         case "ai_anthropic":
             switchChatProvider(.anthropic)
         case "ai_google":
@@ -1724,9 +1739,17 @@ struct IntegrationCardView: View {
         // so the Cursor pill is set up exactly when the Claude Code hooks are.
         case "integration_claude", "agent_cursor":
             return HookServer.claudeHooksInstalled()
+        case let id where PillCatalog.isTerminal(id):
+            return HookServer.claudeHooksInstalled()
         case "agent_codex":
             #if !APPSTORE
             return HookServer.codexHooksInstalled()
+            #else
+            return false
+            #endif
+        case let id where PillCatalog.isSSH(id):
+            #if !APPSTORE
+            return !SSHTunnels.shared.enabledHosts.isEmpty
             #else
             return false
             #endif
@@ -1916,6 +1939,7 @@ struct IntegrationCardView: View {
                    || task.id == "agent_codex"        || task.id == "agent_copilot"
                    || task.id == "agent_muse"         || task.id == "agent_opencode"
                    || task.id == "agent_amp"          || task.id == "agent_hermes"
+                   || PillCatalog.isSSH(task.id) || PillCatalog.isTerminal(task.id)
         let isAI    = ChatProvider(pillID: task.id) != nil
         if isConfigured {
             if isHooks { return String(localized: "Hooks installed") }

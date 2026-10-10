@@ -302,7 +302,9 @@ struct ExpandableText: View {
                 Label(title, systemImage: "gearshape.2")
                     .font(.callout.weight(.semibold))
             }
-            if open || collapsedLines > 0 {
+            if markdown {
+                PhoneMarkdownView(markdown: text, maxLines: open || !isLong ? 0 : collapsedLines)
+            } else if open || collapsedLines > 0 {
                 content
                     .lineLimit(open || !isLong ? nil : collapsedLines)
             }
@@ -317,15 +319,9 @@ struct ExpandableText: View {
     }
 
     @ViewBuilder private var content: some View {
-        if markdown {
-            Text(LocalizedStringKey(text))
-                .font(.callout)
-                .textSelection(.enabled)
-        } else {
-            Text(text)
-                .font(monospaced ? .caption.monospaced() : .callout)
-                .foregroundStyle(monospaced ? Color.secondary : Color.primary)
-                .textSelection(.enabled)
-        }
+        Text(text)
+            .font(monospaced ? .caption.monospaced() : .callout)
+            .foregroundStyle(monospaced ? Color.secondary : Color.primary)
+            .textSelection(.enabled)
     }
 }

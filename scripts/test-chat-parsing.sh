@@ -17,7 +17,7 @@ SERVER_PID=$!
 # time to bind and write its port — avoiding a busy-wait on fast machines.
 swiftc \
     NotchBuddy/Sources/App/LocalChat.swift \
-    NotchBuddy/Sources/App/ChatMarkdown.swift \
+    NotchBuddy/Sources/CoucouKit/ChatMarkdown.swift \
     tests/ChatParsingTests.swift \
     -o "$TEST_DIR/chat-parsing-tests"
 

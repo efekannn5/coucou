@@ -114,6 +114,7 @@ final class SessionPublisher {
                 guard let pillId = SessionSnapshot.pillId(from: id) else { continue }
                 switch outcome {
                 case .success: published[pillId] = nil
+                case .failure(let error as CKError) where error.code == .unknownItem: published[pillId] = nil
                 case .failure(let error): log("delete \(pillId) failed: \(error.localizedDescription)")
                 }
             }
@@ -242,7 +243,8 @@ struct SessionSnapshot: Equatable {
         #if APPSTORE
         record["acceptsInstructions"] = false
         #else
-        record["acceptsInstructions"] = InstructionRunner.isEnabled && (pillId == "integration_claude" || pillId == "agent_cursor")
+        record["acceptsInstructions"] = InstructionRunner.isEnabled
+            && PillCatalog.takesInstructions(pillId)
         #endif
         record.encryptedValues["name"] = name
         record.encryptedValues["steps"] = steps

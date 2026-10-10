@@ -25,10 +25,26 @@ message. It stores nothing and logs nothing.
    npx wrangler login
    npx wrangler secret put APNS_KEY_ID      # paste the Key ID
    npx wrangler secret put APNS_KEY < ~/Downloads/AuthKey_XXXXXXXXXX.p8
+   ./setup-key.sh                           # optional: signing key, Worker + Mac Keychain
    npx wrangler deploy
    ```
    `deploy` prints the URL, like `https://coucou-relay.<you>.workers.dev`.
 3. Check it: `curl https://coucou-relay.<you>.workers.dev/` answers "Coucou relay".
+4. Point the Mac app at it instead of the shared relay:
+   ```
+   defaults write fr.louisraille.NotchBuddy phoneRelayURL https://coucou-relay.<you>.workers.dev
+   ```
+   Then delete the downloaded `.p8` (keep a copy in a password manager if you like).
+
+## Signed requests (optional, for a relay of your own)
+
+With `RELAY_KEY` set (`./setup-key.sh` puts the same key in the Worker and in
+the Mac's Keychain), every request must carry `X-Coucou-Time` (unix seconds)
+and `X-Coucou-Signature`, the hex HMAC-SHA256 of `"<time>.<body>"` with
+`RELAY_KEY`: the relay answers 401 to an unsigned, wrong or
+older-than-5-minutes request, so only your Mac can push to your iPhone.
+Without `RELAY_KEY` the relay stays open, like the shared one. The key itself
+never goes over the network.
 
 ## API
 
@@ -42,4 +58,4 @@ message. It stores nothing and logs nothing.
 ```
 
 200 when Apple accepted the push, 410 when the token is no longer valid,
-400 when the request is malformed.
+400 when the request is malformed, 401 when `RELAY_KEY` is set and the signature is missing or wrong.

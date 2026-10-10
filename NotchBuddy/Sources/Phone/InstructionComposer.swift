@@ -11,6 +11,10 @@ struct InstructionComposer: View {
     @State private var text = ""
     @State private var sending = false
     @State private var sentAt: Date?
+    /// The last message sent from this screen: its RunStatus is shown below.
+    @State private var sentId: String?
+    @State private var options = RunOptions()
+    @State private var stopping = false
     @State private var error: String?
     @State private var dictation = Dictation()
     @State private var quickReplies = QuickReplies.load()
@@ -50,6 +54,7 @@ struct InstructionComposer: View {
     private var shortcuts: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
+                optionsMenu
                 ForEach(quickReplies, id: \.self) { reply in
                     Button {
                         text = reply
@@ -143,17 +148,104 @@ struct InstructionComposer: View {
         }
     }
 
+    /// The model and plan mode for the next message (the session's own by default).
+    private var optionsMenu: some View {
+        Menu {
+            Picker("Model", selection: $options.model) {
+                Text("Session's model").tag("")
+                ForEach(RunOptions.models, id: \.self) { Text($0.capitalized).tag($0) }
+            }
+            Toggle(isOn: $options.planFirst) {
+                Label("Plan first, change nothing", systemImage: "list.bullet.clipboard")
+            }
+        } label: {
+            Label(options.isDefault ? "Options" : options.label, systemImage: "slider.horizontal.3")
+                .font(.footnote.weight(.medium))
+                .lineLimit(1)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .glassPill(Capsule(), interactive: true, tint: options.isDefault ? nil : .accentColor)
+        }
+        .buttonStyle(PressableButtonStyle())
+    }
+
+    /// What the Mac said about the last message: sent from here, or still going.
+    private var run: RunStatus? {
+        guard let run = link.runStatus[session.id] else { return nil }
+        if run.instructionId == sentId { return run }
+        // A run still going (sent before this screen opened), not a stale one.
+        if run.isActive && Date().timeIntervalSince(run.updatedAt) < 2 * 3600 { return run }
+        if let sentAt, run.updatedAt >= sentAt { return run }
+        return nil
+    }
+
     @ViewBuilder private var status: some View {
         if let error {
             Text(error).font(.caption).foregroundStyle(.red)
-        } else if let sentAt {
-            if session.updatedAt > sentAt && (session.isWorking || session.state == .thinking) {
-                Label("Your Mac started it", systemImage: "checkmark.circle.fill")
-                    .font(.caption).foregroundStyle(.green)
-            } else {
-                Label("Sent. Your Mac picks it up within 15 s.", systemImage: "paperplane.fill")
-                    .font(.caption).foregroundStyle(.secondary)
+        } else if let run {
+            HStack(spacing: 8) {
+                runLabel(run)
+                Spacer(minLength: 0)
+                if run.isActive {
+                    Button {
+                        Task { await stop() }
+                    } label: {
+                        Label("Stop", systemImage: "stop.fill")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .glassPill(Capsule(), interactive: true, tint: .red)
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .disabled(stopping)
+                }
             }
+            .animation(.spring(duration: 0.3), value: run.state)
+        } else if sentAt != nil {
+            Label("Sent to your Mac…", systemImage: "paperplane.fill")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private func runLabel(_ run: RunStatus) -> some View {
+        switch run.state {
+        case .queued:
+            Label(run.queued > 1 ? "Waiting for the current run · \(run.queued) in line" : "Waiting for the current run",
+                  systemImage: "hourglass")
+                .font(.caption).foregroundStyle(.secondary)
+        case .running:
+            Label {
+                Text(run.detail.isEmpty ? "Running on your Mac" : "Running in \(run.detail)")
+                    + Text(run.queued > 0 ? " · \(run.queued) waiting" : "")
+            } icon: {
+                Image(systemName: "gearshape.2.fill").symbolEffect(.rotate, isActive: true)
+            }
+            .font(.caption).foregroundStyle(.green)
+        case .finished:
+            Label("Done", systemImage: "checkmark.circle.fill")
+                .font(.caption).foregroundStyle(.green)
+        case .stopped:
+            Label("Stopped", systemImage: "stop.circle")
+                .font(.caption).foregroundStyle(.secondary)
+        case .failed:
+            Label("Failed: \(run.detail)", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption).foregroundStyle(.red)
+                .lineLimit(3)
+        case .ignored:
+            Label("Not run: \(run.detail)", systemImage: "exclamationmark.circle")
+                .font(.caption).foregroundStyle(.orange)
+                .lineLimit(3)
+        }
+    }
+
+    private func stop() async {
+        stopping = true
+        defer { stopping = false }
+        if await link.stopRun(pillId: session.id) {
+            Haptics.impact()
+        } else {
+            error = link.lastPong ?? "Couldn't reach iCloud."
+            Haptics.error()
         }
     }
 
@@ -170,9 +262,12 @@ struct InstructionComposer: View {
             Haptics.warning()
             return
         }
-        if await link.sendInstruction(instruction, pillId: session.id) {
+        if let id = await link.sendInstruction(instruction, pillId: session.id, options: options) {
             sentAt = .now
+            sentId = id
             text = ""
+            // Plan mode is for one message: the next one acts on the plan.
+            options.planFirst = false
             Haptics.success()
         } else {
             error = link.lastPong ?? "Couldn't reach iCloud."

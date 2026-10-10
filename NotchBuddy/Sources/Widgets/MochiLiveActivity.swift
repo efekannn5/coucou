@@ -11,6 +11,8 @@ struct MochiLiveActivity: Widget {
             LockScreenActivityView(state: context.state, stale: context.isStale)
                 .activityBackgroundTint(Color(white: 0.08))
                 .activitySystemActionForegroundColor(.white)
+                // A tap opens that session, its approval card on top.
+                .widgetURL(SharedSession.url(for: context.state.pillId))
         } dynamicIsland: { context in
             let state = context.state
             return DynamicIsland {
@@ -77,6 +79,7 @@ struct MochiLiveActivity: Widget {
                     .frame(width: 22, height: 22)
             }
             .keylineTint(state.toneColor)
+            .widgetURL(SharedSession.url(for: state.pillId))
         }
     }
 }

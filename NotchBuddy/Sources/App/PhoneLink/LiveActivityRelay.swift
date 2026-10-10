@@ -2,6 +2,7 @@
 import AppKit
 import CloudKit
 import Combine
+import CryptoKit
 
 // MARK: - iPhone plan, step 8: Mochi leaves for the iPhone
 //
@@ -26,6 +27,10 @@ final class LiveActivityRelay {
     static let relayURLKey = "phoneRelayURL"
     /// The deployed relay (relay/README.md).
     static let defaultRelayURL = "https://coucou-relay.raillelouis.workers.dev"
+    /// Keychain account of the key that signs each request to a relay of
+    /// one's own (relay/setup-key.sh). Optional: without it, requests go
+    /// unsigned, as the shared relay expects. The key never goes over the network.
+    static let relayKeyAccount = "phoneRelayKey"
 
     static var isEnabled: Bool { UserDefaults.standard.bool(forKey: enabledKey) }
 
@@ -43,6 +48,11 @@ final class LiveActivityRelay {
     private var changeToken: CKServerChangeToken?
 
     private var locked = false
+    /// On: the activity runs whenever an agent works, Mac locked or not
+    /// (defaults write fr.louisraille.NotchBuddy iPhoneLiveActivityAlways -bool YES).
+    static let alwaysKey = "iPhoneLiveActivityAlways"
+    /// The activity may run now: the Mac is locked, or it is always on.
+    private var away: Bool { locked || UserDefaults.standard.bool(forKey: Self.alwaysKey) }
     private var latest: MochiActivityState?
     /// Set while a Live Activity runs on the iPhone(s).
     private var startedAt: Date?
@@ -130,7 +140,7 @@ final class LiveActivityRelay {
         } else {
             log("Mac unlocked")
             lockTask?.cancel(); lockTask = nil
-            guard startedAt != nil else { return }
+            guard startedAt != nil, !away else { return }
             // Mochi comes back to the notch, unless the Mac locks again within 30 s.
             unlockTask = Task {
                 try? await Task.sleep(for: .seconds(30))
@@ -153,15 +163,15 @@ final class LiveActivityRelay {
         lockTask = Task {
             try? await Task.sleep(for: .seconds(20))
             lockTask = nil
-            guard !Task.isCancelled, locked, startedAt == nil, let latest, latest.isActive else { return }
+            guard !Task.isCancelled, away, startedAt == nil, let latest, latest.isActive else { return }
             begin(latest)
         }
     }
 
     private func stateChanged(_ lead: MochiActivityState?) {
-        if lead?.tone != latest?.tone, let lead { log("phase: \(lead.agent) \(lead.statusText)\(locked ? "" : " (Mac unlocked, stays on the Mac)")") }
+        if lead?.tone != latest?.tone, let lead { log("phase: \(lead.agent) \(lead.statusText)\(away ? "" : " (Mac unlocked, stays on the Mac)")") }
         latest = lead
-        guard locked else { return }
+        guard away else { return }
         if startedAt == nil {
             if let lead, lead.isActive { beginSoon(lead) }
             return
@@ -195,7 +205,7 @@ final class LiveActivityRelay {
         Task {
             await refreshPhones()
             // The Mac unlocked meanwhile: don't leave.
-            guard startedAt == start, locked else { return }
+            guard startedAt == start, away else { return }
             startSent = start
             let targets = phones.filter { !$0.value.startToken.isEmpty }
             if targets.isEmpty {
@@ -303,7 +313,12 @@ final class LiveActivityRelay {
             phones.filter { !$0.value.updateToken.isEmpty && $0.value.updatedAt >= date.addingTimeInterval(-2) }
         }
         if fresh().isEmpty { await refreshPhones() }
-        return fresh()
+        let found = fresh()
+        guard found.isEmpty, let sentAt = startSent, Date().timeIntervalSince(sentAt) > 15 else { return found }
+        // No token since this start: iOS kept the activity already on the
+        // iPhone (this Mac restarted meanwhile). Its token is the one to use;
+        // a token really gone is refused by Apple and dropped.
+        return phones.filter { !$0.value.updateToken.isEmpty }
     }
 
     /// Sends one push through the relay. Returns true when Apple accepted it.
@@ -321,7 +336,17 @@ final class LiveActivityRelay {
         var request = URLRequest(url: url, timeoutInterval: 10)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return false }
+        // A relay of one's own with RELAY_KEY: HMAC-SHA256 over "<unix time>.<body>",
+        // so it refuses requests from anyone else, and stale ones.
+        if let key = Keychain.load(key: Self.relayKeyAccount), !key.isEmpty {
+            let time = String(Int(Date().timeIntervalSince1970))
+            let mac = HMAC<SHA256>.authenticationCode(for: Data((time + ".").utf8) + bodyData,
+                                                      using: SymmetricKey(data: Data(key.utf8)))
+            request.setValue(time, forHTTPHeaderField: "X-Coucou-Time")
+            request.setValue(mac.map { String(format: "%02x", $0) }.joined(), forHTTPHeaderField: "X-Coucou-Signature")
+        }
+        request.httpBody = bodyData
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -391,7 +416,11 @@ final class LiveActivityRelay {
                                                          hasQuestion: task.state == .question)
                 return (task, urgency)
             }
-        guard let lead = ranked.min(by: { $0.1 < $1.1 }) else { return nil }
+        // Most urgent first; on a tie, the one that worked last (not just the
+        // first pill, which made "VS Code idle" replace "SSH ✓ done").
+        guard let lead = ranked.min(by: {
+            $0.1 != $1.1 ? $0.1 < $1.1 : ($0.0.lastActiveAt ?? .distantPast) > ($1.0.lastActiveAt ?? .distantPast)
+        }) else { return nil }
         let (task, urgency) = lead
         let others = ranked.filter { $0.0.id != task.id && $0.1 <= 3 }.count
         return MochiActivityState(

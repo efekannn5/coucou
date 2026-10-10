@@ -47,15 +47,27 @@ final class LiveActivityLink {
         }
         Task {
             for await activity in Activity<MochiActivityAttributes>.activityUpdates {
+                // The Mac started a new one (it restarted, or iOS held one back):
+                // only the newest stays, so the Mac's updates reach the one shown.
+                for older in Activity<MochiActivityAttributes>.activities where older.id != activity.id {
+                    await older.end(nil, dismissalPolicy: .immediate)
+                }
                 watch(activity)
             }
         }
-        // Activities already running when the app launches.
+        // Activities already running when the app launches (newest last).
         for activity in Activity<MochiActivityAttributes>.activities { watch(activity) }
     }
 
     private func watch(_ activity: Activity<MochiActivityAttributes>) {
         guard watched.insert(activity.id).inserted else { return }
+        // The token it already has goes now: pushTokenUpdates may not repeat it
+        // after the app was relaunched, and the Mac waits for it.
+        if let token = activity.pushToken {
+            activityID = activity.id
+            updateToken = token.hexString
+            Task { await save() }
+        }
         Task {
             for await data in activity.pushTokenUpdates {
                 activityID = activity.id

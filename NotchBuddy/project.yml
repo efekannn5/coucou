@@ -280,6 +280,16 @@ targets:
         CFBundleName: Coucou
         CFBundleDisplayName: Coucou
         CFBundleIdentifier: fr.louisraille.Coucou
+        # Siri phrases in English and Turkish (Sources/Phone/tr.lproj/AppShortcuts.strings).
+        CFBundleLocalizations:
+          - en
+          - tr
+        # How Siri may hear the name, in Turkish especially.
+        INAlternativeAppNames:
+          - INAlternativeAppName: Kuku
+            INAlternativeAppNamePronunciationHint: kuku
+          - INAlternativeAppName: Mochi
+            INAlternativeAppNamePronunciationHint: moçi
         CFBundleVersion: "3"
         CFBundleShortVersionString: "1.0"
         CFBundlePackageType: APPL

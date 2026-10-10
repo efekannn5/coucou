@@ -63,12 +63,14 @@ enum SharedSessions {
         try? data.write(to: url, options: .atomic)
     }
 
-    /// Most urgent first.
+    /// Most urgent first, then the latest (like the app's list): with the
+    /// category before the date, a VS Code idle for days led over the SSH
+    /// session that just finished.
     static func load() -> [SharedSession] {
         guard let url = fileURL, let data = try? Data(contentsOf: url),
               let sessions = try? JSONDecoder().decode([SharedSession].self, from: data) else { return [] }
         return sessions.sorted {
-            ($0.urgency, $0.categoryRank, $1.updatedAt) < ($1.urgency, $1.categoryRank, $0.updatedAt)
+            ($0.urgency, $1.updatedAt, $0.categoryRank) < ($1.urgency, $0.updatedAt, $1.categoryRank)
         }
     }
 }

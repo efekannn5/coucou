@@ -148,7 +148,7 @@ enum AgentNotifier {
             guard PhoneSettings.notifyDone, !PhoneSettings.focusOnlyWaiting else { return }
             content.title = "\(session.pillName) · \(session.title)"
             let answer = turn.map(\.finalMessage).flatMap { $0.isEmpty ? nil : $0 } ?? session.finalLine
-            content.body = answer.isEmpty ? "Done. What's next?" : "✓ " + String(answer.prefix(220))
+            content.body = answer.isEmpty ? "Done. What's next?" : "✓ " + String(PhoneMarkdownView.plain(answer).prefix(220))
             content.sound = quiet ? nil : PhoneSettings.sound("finish")
             content.categoryIdentifier = session.acceptsInstructions
                 ? NotificationActions.doneReplyCategory : NotificationActions.doneCategory

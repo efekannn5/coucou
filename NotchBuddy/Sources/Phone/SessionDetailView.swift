@@ -10,6 +10,12 @@ struct SessionDetailView: View {
     private var turn: TurnSnapshot? { link.turns[sessionId] }
     private var pastTurns: [TurnSnapshot] { link.archive.past[sessionId] ?? [] }
     @State private var shareImage: UIImage?
+    /// The session as last seen: when its record leaves iCloud (the session
+    /// ended, or a run from the iPhone just finished), the field stays, and
+    /// what's typed in it still continues the same conversation on the Mac.
+    @State private var lastSeen: SessionItem?
+    @State private var openedAt = Date()
+    private var composerSession: SessionItem? { session ?? lastSeen }
 
     var body: some View {
         ScrollView {
@@ -53,6 +59,34 @@ struct SessionDetailView: View {
                     if !pastTurns.isEmpty { earlierTurns }
                 }
                 .padding(16)
+            } else if let run = link.runStatus[sessionId] {
+                // Started from here: the session shows up with its first hook.
+                VStack(spacing: 12) {
+                    switch run.state {
+                    case .queued, .running:
+                        ProgressView()
+                        Text(run.detail.isEmpty ? "Starting on your Mac…" : "Starting in \(run.detail)…")
+                            .foregroundStyle(.secondary)
+                    case .failed, .ignored:
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        Text("Not started: \(run.detail)")
+                            .foregroundStyle(.secondary)
+                    case .finished, .stopped:
+                        Text("This session ended on your Mac.")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(40)
+            } else if lastSeen == nil, Date().timeIntervalSince(openedAt) < 60 {
+                // Just sent from New session: the Mac hasn't answered yet.
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("Sent to your Mac…").foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(40)
             } else {
                 Text("This session ended on your Mac.")
                     .foregroundStyle(.secondary)
@@ -82,9 +116,13 @@ struct SessionDetailView: View {
         }
         // The composer stays at the bottom, like a chat.
         .safeAreaInset(edge: .bottom) {
-            if let session, session.id == "integration_claude" || session.id == "agent_cursor" {
+            if let session = composerSession,
+               PillCatalog.takesInstructions(session.id) {
                 InstructionComposer(link: link, session: session)
             }
+        }
+        .onChange(of: session?.updatedAt, initial: true) {
+            if let session { lastSeen = session }
         }
         // Scrolling puts the keyboard away.
         .scrollDismissesKeyboard(.immediately)

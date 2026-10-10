@@ -84,6 +84,7 @@ struct AgentsTab: View {
     let link: PhoneLink
     @Binding var path: [String]
     @Namespace private var zoom
+    @State private var newSession = false
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -155,7 +156,22 @@ struct AgentsTab: View {
                     // The Mochi tile grows into the session, and shrinks back.
                     .navigationTransition(.zoom(sourceID: id, in: zoom))
             }
+            .sheet(isPresented: $newSession) {
+                NewSessionView(link: link) { pillId in path = [pillId] }
+            }
             .toolbar {
+                // A session can start from here once the Mac lists projects
+                // (instructions turned on in its Settings).
+                if !link.projects.isEmpty || !link.hosts.isEmpty {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            newSession = true
+                        } label: {
+                            Image(systemName: "square.and.pencil")
+                        }
+                        .accessibilityLabel("New session")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink {
                         AboutView(link: link)
@@ -304,7 +320,7 @@ struct SessionPeek: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 if !turn.finalMessage.isEmpty {
-                    Text(turn.finalMessage).font(.callout).foregroundStyle(.secondary).lineLimit(6)
+                    Text(PhoneMarkdownView.plain(turn.finalMessage)).font(.callout).foregroundStyle(.secondary).lineLimit(6)
                 }
             }
         }

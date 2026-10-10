@@ -76,7 +76,7 @@ struct TurnShareCard: View {
                 }
             }
             if !turn.finalMessage.isEmpty {
-                Text(turn.finalMessage)
+                Text(PhoneMarkdownView.plain(turn.finalMessage))
                     .font(.callout)
                     .foregroundStyle(.white.opacity(0.85))
                     .lineLimit(8)

@@ -10,6 +10,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         DemoEngine.shared.stop()
         HotKeyCenter.shared.unregisterAll()
+        #if !APPSTORE
+        SSHTunnels.shared.stopAll()
+        #endif
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -191,6 +194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         HookServer.shared.start()
         #if !APPSTORE
         _ = VoiceEngine.shared  // registers system observers; starts mic only if the user enabled voice
+        SSHTunnels.shared.start()
         #endif
         N8nPoller.shared.start()
         VercelPoller.shared.start()

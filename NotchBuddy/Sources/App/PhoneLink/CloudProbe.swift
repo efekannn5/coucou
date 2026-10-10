@@ -186,6 +186,10 @@ final class CloudProbe {
         lastPushAt = Date()
         // A request from the iPhone (a service to read, an action) may be waiting.
         Task { await ServiceDetailRunner.shared.checkNow() }
+        #if !APPSTORE
+        // Or an instruction: taken now instead of at the next 15 s check.
+        Task { await InstructionRunner.shared.checkNow() }
+        #endif
         guard pingTask != nil else { return }   // the Pong fetch is only for the ping test
         log("push received")
         Task { await fetchChanges(source: "push") }

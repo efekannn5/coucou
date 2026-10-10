@@ -52,7 +52,10 @@ struct MochiActivityState: Codable, Hashable, Sendable {
         }
         switch state {
         case .working, .thinking, .searching:
-            return stepCount == 0 ? "working" : "working · \(min(stepIndex + 1, stepCount))/\(stepCount)"
+            // The Mac keeps the last 20 steps and points at the newest, so
+            // "i/n" always read n/n: show how far along instead.
+            if stepCount == 0 { return "working" }
+            return stepCount >= 20 ? "working · 20+ steps" : "working · step \(stepCount)"
         case .finished: return "✓ done"
         case .error: return "error"
         case .ratelimit: return "rate limited"

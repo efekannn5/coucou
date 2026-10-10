@@ -13,6 +13,7 @@ export interface Env {
   APNS_KEY_ID: string;   // the key's ID (secret)
   APNS_TEAM_ID: string;
   APNS_TOPIC: string;
+  RELAY_KEY?: string;    // optional: when set, every request must be signed (secret, setup-key.sh)
 }
 
 type Event = "start" | "update" | "end";
@@ -41,10 +42,15 @@ export default {
     if (Number(request.headers.get("content-length") ?? "0") > 4096) {
       return text(413, "too large");
     }
+    const raw = await request.text();
+    if (raw.length > 4096) return text(413, "too large");
+    // A relay of one's own with RELAY_KEY set: only signed requests (the Mac
+    // with the same key). Without it, open like the shared relay.
+    if (env.RELAY_KEY && !(await signed(request, raw, env.RELAY_KEY))) return text(401, "bad signature");
 
     let body: RelayRequest;
     try {
-      body = await request.json();
+      body = JSON.parse(raw);
     } catch {
       return text(400, "bad json");
     }
@@ -135,6 +141,26 @@ function buildPayload(body: RelayRequest) {
     aps["dismissal-date"] = now + (body.dismissAfter ?? 0);
   }
   return { aps };
+}
+
+// MARK: Request signature: HMAC-SHA256 of "<unix time>.<body>" with RELAY_KEY.
+// The key never travels, only the signature; a request older than 5 minutes is refused.
+
+async function signed(request: Request, raw: string, secret: string): Promise<boolean> {
+  const time = request.headers.get("x-coucou-time") ?? "";
+  const signature = request.headers.get("x-coucou-signature") ?? "";
+  if (!/^[0-9]{10}$/.test(time) || !/^[0-9a-f]{64}$/.test(signature)) return false;
+  if (Math.abs(Math.floor(Date.now() / 1000) - Number(time)) > 300) return false;
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["verify"],
+  );
+  const bytes = new Uint8Array(signature.match(/../g)!.map((h) => parseInt(h, 16)));
+  // verify compares in constant time.
+  return crypto.subtle.verify("HMAC", key, bytes, new TextEncoder().encode(`${time}.${raw}`));
 }
 
 // MARK: APNs provider token (ES256 JWT), reused for 50 minutes as Apple asks.

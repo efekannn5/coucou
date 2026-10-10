@@ -35,6 +35,47 @@ final class TurnRecorder {
         return info
     }
     private var sessions: [String: (sessionId: String, cwd: String)] = [:]
+    /// Host name the hook reported for an SSH session (coucou_remote_host).
+    private var remoteHosts: [String: String] = [:]
+
+    /// Sessions seen, kept across restarts: after the Mac restarted, an
+    /// instruction from the iPhone was dropped ("no session seen yet").
+    /// Ids, folders and host names only, the newest 40.
+    private static let savedKey = "turnRecorderSessions"
+    private var savedOrder: [String] = []
+    private var lastUsed: [String: Date] = [:]
+
+    init() {
+        let saved = UserDefaults.standard.array(forKey: Self.savedKey) as? [[String]] ?? []
+        for entry in saved where entry.count >= 4 {
+            sessions[entry[0]] = (entry[1], entry[2])
+            if !entry[3].isEmpty { remoteHosts[entry[0]] = entry[3] }
+            if entry.count > 4, let seconds = Double(entry[4]) { lastUsed[entry[0]] = Date(timeIntervalSince1970: seconds) }
+            savedOrder.append(entry[0])
+        }
+    }
+
+    /// Every session remembered, for the projects a new one can start in.
+    func knownSessions() -> [(pillId: String, cwd: String, host: String?, lastUsed: Date)] {
+        savedOrder.compactMap { id in
+            guard let info = sessions[id], !info.cwd.isEmpty else { return nil }
+            return (id, info.cwd, remoteHosts[id], lastUsed[id] ?? .distantPast)
+        }
+    }
+
+    private func remember(_ pillId: String) {
+        savedOrder.removeAll { $0 == pillId }
+        savedOrder.append(pillId)
+        savedOrder = Array(savedOrder.suffix(40))
+        let entries = savedOrder.compactMap { id -> [String]? in
+            guard let info = sessions[id] else { return nil }
+            return [id, info.sessionId, info.cwd, remoteHosts[id] ?? "",
+                    String(Int((lastUsed[id] ?? Date()).timeIntervalSince1970))]
+        }
+        UserDefaults.standard.set(entries, forKey: Self.savedKey)
+    }
+
+    func lastRemoteHost(for pillId: String) -> String? { remoteHosts[pillId] }
 
     func start() {
         running = true
@@ -60,7 +101,15 @@ final class TurnRecorder {
         let sessionId = payload["session_id"] as? String ?? payload["conversation_id"] as? String ?? ""
         let cwd = payload["cwd"] as? String ?? ""
         let now = Date()
-        if !sessionId.isEmpty, !cwd.isEmpty { sessions[pillId] = (sessionId, cwd) }
+        if !sessionId.isEmpty, !cwd.isEmpty {
+            let host = HookServer.validateRemoteHost(payload["coucou_remote_host"] as? String ?? "")
+            let changed = sessions[pillId]?.sessionId != sessionId || sessions[pillId]?.cwd != cwd
+                || remoteHosts[pillId] != host
+            sessions[pillId] = (sessionId, cwd)
+            remoteHosts[pillId] = host
+            lastUsed[pillId] = now
+            if changed { remember(pillId) }
+        }
 
         switch event {
         case "UserPromptSubmit":

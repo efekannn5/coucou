@@ -1,0 +1,25 @@
+/* Siri in Turkish: each English phrase of CoucouShortcuts, as said in Turkish. */
+
+"What are my agents doing in ${applicationName}" = "${applicationName} ne alemde";
+"${applicationName} status" = "${applicationName} durum";
+"Agent status in ${applicationName}" = "${applicationName} ajanlar ne yapıyor";
+"How is ${applicationName} doing" = "${applicationName} ne durumda";
+
+"Ask Claude in ${applicationName}" = "${applicationName} Claude'a sor";
+"Tell Claude with ${applicationName}" = "${applicationName} Claude'a söyle";
+"Send an instruction with ${applicationName}" = "${applicationName} talimat gönder";
+"Give ${applicationName} a job" = "${applicationName} görev ver";
+
+"Start a task in ${applicationName}" = "${applicationName} yeni görev başlat";
+"New task with ${applicationName}" = "${applicationName} yeni görev";
+"Start a new session in ${applicationName}" = "${applicationName} yeni oturum aç";
+
+"What did Claude say in ${applicationName}" = "${applicationName} Claude ne dedi";
+"Read the last answer in ${applicationName}" = "${applicationName} son cevabı oku";
+"What did ${applicationName} say" = "${applicationName} ne dedi";
+
+"Allow the command in ${applicationName}" = "${applicationName} komutu onayla";
+"Approve in ${applicationName}" = "${applicationName} onayla";
+
+"Deny the command in ${applicationName}" = "${applicationName} komutu reddet";
+"Reject in ${applicationName}" = "${applicationName} reddet";
